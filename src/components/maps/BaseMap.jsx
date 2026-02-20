@@ -2,12 +2,11 @@ import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
-export default function BaseMap({ view, styleUrl, opacity = 1, onStatus = () => {} }) {
+export default function BaseMap({ view, styleUrl, onStatus = () => {} }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
 
   useEffect(() => {
-    // StrictMode-safe reset
     if (mapRef.current) {
       try { mapRef.current.remove(); } catch {}
       mapRef.current = null;
@@ -20,14 +19,13 @@ export default function BaseMap({ view, styleUrl, opacity = 1, onStatus = () => 
       zoom: view.zoom,
       bearing: view.bearing,
       pitch: view.pitch,
-      interactive: false, // IMPORTANT: basemaps follow the overlay
+      interactive: false,
+      attributionControl: false,
     });
 
     mapRef.current = map;
 
-    map.once("load", () => {
-      onStatus("Ready");
-    });
+    map.once("load", () => onStatus("Ready"));
 
     return () => {
       try { map.remove(); } catch {}
@@ -36,7 +34,7 @@ export default function BaseMap({ view, styleUrl, opacity = 1, onStatus = () => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [styleUrl]);
 
-  // Follow the overlay view
+  // Basemap follows overlay view
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -51,7 +49,8 @@ export default function BaseMap({ view, styleUrl, opacity = 1, onStatus = () => 
   return (
     <div
       ref={containerRef}
-      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity }}
+      style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
     />
   );
 }
+

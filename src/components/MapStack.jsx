@@ -14,28 +14,24 @@ export default function MapStack({
 }) {
   return (
     <div className="absolute inset-0">
-      {/* Day basemap */}
-      <div className="absolute inset-0">
-        <BaseMap
-          view={view}
-          styleUrl={STYLE_DAY}
-          opacity={1}
-          onStatus={onStatus}
-        />
+      {/* Basemaps must NOT intercept gestures */}
+      <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
+        <BaseMap view={view} styleUrl={STYLE_DAY} onStatus={onStatus} />
       </div>
 
-      {/* Dark basemap (crossfade) */}
-      <div className="absolute inset-0" style={{ opacity: darkMapOpacity, transition: "opacity 250ms linear" }}>
-        <BaseMap
-          view={view}
-          styleUrl={STYLE_DARK}
-          opacity={1}
-          onStatus={onStatus}
-        />
+      <div
+        className="absolute inset-0"
+        style={{
+          opacity: darkMapOpacity,
+          transition: "opacity 250ms linear",
+          pointerEvents: "none",
+        }}
+      >
+        <BaseMap view={view} styleUrl={STYLE_DARK} onStatus={onStatus} />
       </div>
 
-      {/* Lights overlay (top, interactive) */}
-      <div className="absolute inset-0">
+      {/* Overlay receives gestures */}
+      <div className="absolute inset-0" style={{ pointerEvents: "auto" }}>
         <LightsOverlay
           view={view}
           onView={onView}

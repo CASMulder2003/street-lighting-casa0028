@@ -17,6 +17,9 @@ export default function LightsOverlay({
   const readyRef = useRef(false);
   const litDataRef = useRef(null);
 
+  // throttle view sync to React so dragging stays smooth
+  const rafRef = useRef(null);
+
   const safeSetPaint = (layerId, prop, value) => {
     const map = mapRef.current;
     try {
@@ -28,8 +31,7 @@ export default function LightsOverlay({
   };
 
   const addLights = async (map) => {
-    // Transparent “empty” style (overlay)
-    // Add blackout overlay first so it can cover basemaps beneath.
+    // Blackout layer (covers basemaps below)
     if (!map.getLayer("blackout")) {
       map.addLayer({
         id: "blackout",
@@ -47,7 +49,7 @@ export default function LightsOverlay({
       const res = await fetch(url);
       if (!res.ok) {
         onStatus(`FAILED: lit_web.geojson (${res.status})`);
-        return;
+        return false;
       }
       litDataRef.current = await res.json();
     }
@@ -79,14 +81,14 @@ export default function LightsOverlay({
       });
     };
 
-    // Bloom + glows + core
     add("lit-glow-3", bloomColor, ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 14, 17, 30], 14);
-    add("lit-glow-2", glowColor, ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 10, 17, 22], 10);
-    add("lit-glow-1", glowColor, ["interpolate", ["linear"], ["zoom"], 10, 2.5, 14, 6, 17, 14], 5);
-    add("lit-core", coreColor, ["interpolate", ["linear"], ["zoom"], 10, 1.0, 14, 2.2, 17, 5], 0.8);
+    add("lit-glow-2", glowColor,  ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 10, 17, 22], 10);
+    add("lit-glow-1", glowColor,  ["interpolate", ["linear"], ["zoom"], 10, 2.5, 14, 6, 17, 14], 5);
+    add("lit-core",   coreColor,  ["interpolate", ["linear"], ["zoom"], 10, 1.0, 14, 2.2, 17, 5], 0.8);
 
     readyRef.current = true;
     onStatus("Ready");
+    return true;
   };
 
   useEffect(() => {
@@ -101,23 +103,24 @@ export default function LightsOverlay({
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      // Minimal blank style so overlay is transparent (no basemap)
-      style: {
-        version: 8,
-        sources: {},
-        layers: [],
-      },
+      style: { version: 8, sources: {}, layers: [] }, // transparent overlay
       center: [view.lng, view.lat],
       zoom: view.zoom,
       bearing: view.bearing,
       pitch: view.pitch,
-      interactive: true, // THIS is the map the user interacts with
+      interactive: true,
+      dragPan: true,
+      scrollZoom: true,
+      dragRotate: true,
+      touchZoomRotate: true,
+      attributionControl: false,
     });
 
     mapRef.current = map;
 
     map.once("load", async () => {
-      await addLights(map);
+      const ok = await addLights(map);
+      if (!ok) return;
 
       // initial paint
       safeSetPaint("blackout", "background-opacity", clamp01(asNumber(blackoutOpacity, 0)));
@@ -125,68 +128,59 @@ export default function LightsOverlay({
       safeSetPaint("lit-glow-3", "line-opacity", lo * 0.18);
       safeSetPaint("lit-glow-2", "line-opacity", lo * 0.30);
       safeSetPaint("lit-glow-1", "line-opacity", lo * 0.45);
-      safeSetPaint("lit-core", "line-opacity", lo * 0.95);
+      safeSetPaint("lit-core",   "line-opacity", lo * 0.95);
     });
 
-    // sync view outward
-    const emit = () => {
-      const c = map.getCenter();
-      onView({
-        lng: c.lng,
-        lat: c.lat,
-        zoom: map.getZoom(),
-        bearing: map.getBearing(),
-        pitch: map.getPitch(),
+    // IMPORTANT: only emit view OUTWARD; do NOT jumpTo based on view props
+    const emitThrottled = () => {
+      if (rafRef.current) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        const c = map.getCenter();
+        onView({
+          lng: c.lng,
+          lat: c.lat,
+          zoom: map.getZoom(),
+          bearing: map.getBearing(),
+          pitch: map.getPitch(),
+        });
       });
     };
-    map.on("move", emit);
+
+    map.on("move", emitThrottled);
 
     return () => {
-      try { map.off("move", emit); map.remove(); } catch {}
+      try {
+        map.off("move", emitThrottled);
+        map.remove();
+      } catch {}
       mapRef.current = null;
       readyRef.current = false;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // If App changes view (rare), follow it
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    map.jumpTo({
-      center: [view.lng, view.lat],
-      zoom: view.zoom,
-      bearing: view.bearing,
-      pitch: view.pitch,
-    });
-  }, [view]);
-
-  // Update blackout
+  // Update blackout + lights ONLY (no camera updates here)
   useEffect(() => {
     safeSetPaint("blackout", "background-opacity", clamp01(asNumber(blackoutOpacity, 0)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blackoutOpacity]);
 
-  // Update lights
   useEffect(() => {
     const lo = clamp01(asNumber(lightsOpacity, 0));
     safeSetPaint("lit-glow-3", "line-opacity", lo * 0.18);
     safeSetPaint("lit-glow-2", "line-opacity", lo * 0.30);
     safeSetPaint("lit-glow-1", "line-opacity", lo * 0.45);
-    safeSetPaint("lit-core", "line-opacity", lo * 0.95);
+    safeSetPaint("lit-core",   "line-opacity", lo * 0.95);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lightsOpacity]);
 
   return (
     <div
       ref={containerRef}
-      style={{
-        position: "absolute",
-        inset: 0,
-        width: "100%",
-        height: "100%",
-        // Allow clicks + gestures to reach this overlay
-      }}
+      style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
     />
   );
 }

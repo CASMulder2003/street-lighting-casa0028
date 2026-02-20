@@ -25,7 +25,7 @@ function tween(setter, from, to, durationMs) {
 }
 
 export default function App() {
-  // Shared view state (controlled by the top interactive map)
+  // Shared view state (controlled by overlay map)
   const [view, setView] = useState({
     lng: 4.9,
     lat: 52.37,
@@ -35,13 +35,16 @@ export default function App() {
   });
 
   // Visual states
-  const [lightsOpacity, setLightsOpacity] = useState(0);   // 0..1
-  const [blackoutOpacity, setBlackoutOpacity] = useState(0); // 0..1 (black overlay)
-  const [darkMapOpacity, setDarkMapOpacity] = useState(0); // 0..1 (crossfade day->dark basemap)
+  const [lightsOpacity, setLightsOpacity] = useState(0);     // 0..1
+  const [blackoutOpacity, setBlackoutOpacity] = useState(0); // 0..1
+  const [darkMapOpacity, setDarkMapOpacity] = useState(0);   // 0..1
 
-  // mode bookkeeping
-  const [mode, setMode] = useState("day"); // day | night | full
+  // Modes: day | night | full
+  const [mode, setMode] = useState("day");
   const [status, setStatus] = useState("Ready");
+
+  // Info modal placeholder
+  const [isInfoOpen, setIsInfoOpen] = useState(false);
 
   const runningRef = useRef(false);
 
@@ -51,37 +54,33 @@ export default function App() {
   const toNight = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
+
     setStatus("Transition: Day → Night");
     setMode("night");
 
-    // Ensure dark map is off for pure night mode
+    // Ensure full-map context is off when entering night
     setDarkMapOpacity(0);
 
-    // Fade to black
     await tween(setBlackoutOpacity, blackoutOpacity, 1, 900);
     await wait(120);
-
-    // Fade lights in
     await tween(setLightsOpacity, lightsOpacity, 1, 1200);
 
     setStatus("Ready");
     runningRef.current = false;
   };
 
-  // Night -> Full (dark basemap fades in; blackout reduces to allow basemap to show)
+  // Night -> Full (dark basemap fades in; blackout reduces)
   const toFull = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
+
     setStatus("Transition: Night → Full map");
     setMode("full");
 
     // Keep lights on
-    if (lightsOpacity < 1) await tween(setLightsOpacity, lightsOpacity, 1, 400);
+    if (lightsOpacity < 1) await tween(setLightsOpacity, lightsOpacity, 1, 300);
 
-    // Fade in dark basemap under the lights
     await tween(setDarkMapOpacity, darkMapOpacity, 1, 500);
-
-    // Reduce blackout so the basemap is visible but still “night”
     await tween(setBlackoutOpacity, blackoutOpacity, 0.15, 450);
 
     setStatus("Ready");
@@ -92,17 +91,16 @@ export default function App() {
   const fullToNight = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
+
     setStatus("Transition: Full map → Night");
     setMode("night");
 
-    // Bring blackout up slightly first to mask the crossfade
-    await tween(setBlackoutOpacity, blackoutOpacity, 1, 350);
+    // Mask the crossfade slightly
+    await tween(setBlackoutOpacity, blackoutOpacity, 1, 250);
     await wait(60);
-
-    // Fade out dark basemap
     await tween(setDarkMapOpacity, darkMapOpacity, 0, 450);
 
-    // Stay in pure night (black)
+    // Return to pure night black behind lights
     await tween(setBlackoutOpacity, blackoutOpacity, 1, 200);
 
     setStatus("Ready");
@@ -113,21 +111,37 @@ export default function App() {
   const toDay = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
+
     setStatus("Transition: Back to Day");
     setMode("day");
 
-    // Fade lights out
+    // Fade lights out first
     await tween(setLightsOpacity, lightsOpacity, 0, 600);
     await wait(80);
 
-    // Make sure dark basemap is gone
+    // Ensure dark map context is off
     await tween(setDarkMapOpacity, darkMapOpacity, 0, 400);
 
-    // Fade blackout away to reveal day basemap
+    // Reveal day basemap
     await tween(setBlackoutOpacity, blackoutOpacity, 0, 650);
 
     setStatus("Ready");
     runningRef.current = false;
+  };
+
+  // ---- BUTTON LOGIC ----
+
+  // Button 1: Show night lights <-> Back to day
+  const mainLabel = mode === "day" ? "Show night lights" : "Back to day";
+  const mainAction = mode === "day" ? toNight : toDay;
+
+  // Button 2: Show full map <-> Hide full map (only works once in night/full)
+  const contextLabel = mode === "full" ? "Hide full map" : "Show full map";
+  const contextDisabled = (mode === "day") || runningRef.current;
+  const contextAction = () => {
+    if (mode === "night") return toFull();
+    if (mode === "full") return fullToNight();
+    // if day: do nothing (disabled anyway)
   };
 
   return (
@@ -141,48 +155,68 @@ export default function App() {
         onStatus={setStatus}
       />
 
-      <TitleBar title="Amsterdam Night Lighting" />
+      <TitleBar
+        title="Amsterdam Night Lighting"
+        controls={
+          <>
+            {/* 1) Main toggle */}
+            <button
+              className="rounded-lg border border-white/20 bg-black/40 px-3 py-2 text-sm hover:border-white/30 disabled:opacity-40"
+              disabled={runningRef.current}
+              onClick={mainAction}
+              title={mainLabel}
+            >
+              {mainLabel}
+            </button>
 
-      {/* Controls (always visible) */}
-      <div className="absolute left-4 top-20 z-50 w-[360px] rounded-xl border border-white/15 bg-black/55 p-3 text-white backdrop-blur">
-        <div className="text-sm opacity-90 mb-2">Controls</div>
+            {/* 2) Context toggle */}
+            <button
+              className="rounded-lg border border-white/20 bg-black/40 px-3 py-2 text-sm hover:border-white/30 disabled:opacity-40"
+              disabled={contextDisabled}
+              onClick={contextAction}
+              title={contextLabel}
+            >
+              {contextLabel}
+            </button>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            className="rounded-lg border border-white/20 bg-black/40 px-3 py-2 hover:border-white/30 disabled:opacity-40"
-            disabled={mode !== "day" || runningRef.current}
-            onClick={toNight}
-          >
-            Show night lights
-          </button>
+            {/* 3) Info button (placeholder for modal later) */}
+            <button
+              className="grid h-10 w-10 place-items-center rounded-full border border-white/20 bg-black/40 text-sm hover:border-white/30"
+              onClick={() => setIsInfoOpen(true)}
+              title="Info"
+              type="button"
+            >
+              ?
+            </button>
+          </>
+        }
+      />
 
-          <button
-            className="rounded-lg border border-white/20 bg-black/40 px-3 py-2 hover:border-white/30 disabled:opacity-40"
-            disabled={mode !== "night" || runningRef.current}
-            onClick={toFull}
-          >
-            Show full map
-          </button>
-
-          <button
-            className="rounded-lg border border-white/20 bg-black/40 px-3 py-2 hover:border-white/30 disabled:opacity-40"
-            disabled={mode !== "full" || runningRef.current}
-            onClick={fullToNight}
-          >
-            Hide full map
-          </button>
-
-          <button
-            className="rounded-lg border border-white/20 bg-black/40 px-3 py-2 hover:border-white/30 disabled:opacity-40"
-            disabled={(mode === "day") || runningRef.current}
-            onClick={toDay}
-          >
-            Back to day
-          </button>
-        </div>
-
-        <div className="mt-3 text-xs opacity-80">Status: {status}</div>
+      {/* Optional: tiny status line (you said you'll change later, but this is handy) */}
+      <div className="absolute left-4 top-20 z-50 text-xs text-white/70">
+        {status}
       </div>
+
+      {/* Placeholder modal (does nothing functional yet; can remove if you prefer) */}
+      {isInfoOpen && (
+        <div className="absolute inset-0 z-[60] grid place-items-center bg-black/60 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-white/15 bg-black/70 p-4 text-white backdrop-blur">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">Info</h2>
+              <button
+                className="rounded-lg border border-white/20 bg-black/40 px-3 py-1 text-sm hover:border-white/30"
+                onClick={() => setIsInfoOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <p className="mt-3 text-sm text-white/80">
+              Placeholder — we’ll hook this up to your methodology / data story modal later.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

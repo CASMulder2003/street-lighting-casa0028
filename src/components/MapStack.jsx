@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
+// Carto basemap styles (day + dark)
 const STYLE_DAY = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const STYLE_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
+// Small helpers
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const asNumber = (v, fallback) => (Number.isFinite(v) ? v : fallback);
 
@@ -16,20 +18,26 @@ export default function MapStack({
   darkMapOpacity,
   onStatus = () => {},
 }) {
+  // Keep map instances around (so we can update them from effects)
   const dayRef = useRef(null);
   const darkRef = useRef(null);
   const overlayRef = useRef(null);
 
+  // DOM containers for each MapLibre canvas
   const dayEl = useRef(null);
   const darkEl = useRef(null);
   const overlayEl = useRef(null);
 
+  // I only fade the dark map in after it's "idle" once (prevents a flash)
   const [darkIdleReady, setDarkIdleReady] = useState(false);
 
+  // Cache the GeoJSON in-memory so I don’t refetch it
   const litDataRef = useRef(null);
+
+  // I throttle view updates back into React using RAF (smooth dragging)
   const rafRef = useRef(null);
 
-  // Keep last camera so when dark/day finishes loading we can snap it immediately.
+  // I keep the last camera state so newly-ready maps can snap into place
   const lastCamRef = useRef({
     center: [view.lng, view.lat],
     zoom: view.zoom,
@@ -38,11 +46,14 @@ export default function MapStack({
   });
 
   useEffect(() => {
-    let dead = false;
+    let dead = false; // simple “is unmounted” guard
 
     onStatus("Creating maps…");
 
-    // --- Create DAY map (non-interactive) ---
+    // -----------------------------
+    // 1) Create the DAY basemap
+    // -----------------------------
+    // Non-interactive: the overlay map is the one that receives gestures.
     const dayMap = new maplibregl.Map({
       container: dayEl.current,
       style: STYLE_DAY,
@@ -54,7 +65,10 @@ export default function MapStack({
       attributionControl: false,
     });
 
-    // --- Create DARK map (non-interactive) ---
+    // -----------------------------
+    // 2) Create the DARK basemap
+    // -----------------------------
+    // Also non-interactive and faded in/out using darkMapOpacity.
     const darkMap = new maplibregl.Map({
       container: darkEl.current,
       style: STYLE_DARK,
@@ -66,10 +80,48 @@ export default function MapStack({
       attributionControl: false,
     });
 
-    // --- Create OVERLAY map (interactive, transparent style) ---
+    // I hide place-name labels on the dark map (e.g., “Amsterdam”),
+    // but I try to leave other labels (like roads) alone.
+    const hidePlaceNames = () => {
+      try {
+        const style = darkMap.getStyle();
+        if (!style?.layers) return;
+
+        for (const layer of style.layers) {
+          if (layer.type !== "symbol") continue;
+
+          const id = layer.id || "";
+          const looksLikePlace =
+            /place|settlement|city|town|village|hamlet|suburb|neighbourhood|neighborhood/i.test(id);
+
+          if (looksLikePlace) {
+            try {
+              darkMap.setLayoutProperty(layer.id, "visibility", "none");
+            } catch {}
+          }
+        }
+      } catch {}
+    };
+
+    // Apply label hiding once the dark style has loaded…
+    darkMap.once("load", hidePlaceNames);
+
+    // …and re-apply if the style updates internally.
+    const onDarkStyleData = () => {
+      try {
+        if (darkMap.isStyleLoaded && darkMap.isStyleLoaded()) hidePlaceNames();
+      } catch {}
+    };
+    darkMap.on("styledata", onDarkStyleData);
+
+    // -----------------------------
+    // 3) Create the OVERLAY map
+    // -----------------------------
+    // Transparent style so only my lighting layers show.
+    // This is the ONLY interactive map.
     const overlayMap = new maplibregl.Map({
       container: overlayEl.current,
-      style: { version: 8, sources: {}, layers: [] }, // transparent canvas
+      style: { version: 8, sources: {}, layers: [] },
       center: [view.lng, view.lat],
       zoom: view.zoom,
       bearing: view.bearing,
@@ -78,30 +130,40 @@ export default function MapStack({
       attributionControl: false,
     });
 
+    // Store instances in refs (so other effects can use them)
     dayRef.current = dayMap;
     darkRef.current = darkMap;
     overlayRef.current = overlayMap;
 
-    // Ensure canvases size correctly (important in absolute layouts)
+    // -----------------------------
+    // 4) Keep canvas sizes correct
+    // -----------------------------
+    // MapLibre can get “stuck” if it thinks the canvas size is 0,
+    // so I resize all maps on mount and on window resize.
     const resizeAll = () => {
       try { dayMap.resize(); } catch {}
       try { darkMap.resize(); } catch {}
       try { overlayMap.resize(); } catch {}
     };
-    // next tick resize helps avoid “frozen” transforms on some browsers
     requestAnimationFrame(resizeAll);
     window.addEventListener("resize", resizeAll);
 
-    // ----- Dark readiness gate to prevent flash -----
+    // -----------------------------
+    // 5) Gate dark-map fade-in
+    // -----------------------------
+    // Waiting for "idle" avoids the dark map flashing in while tiles are still loading.
     const onDarkIdle = () => {
       if (dead) return;
       setDarkIdleReady(true);
-      // snap to last camera so when it appears it’s already aligned
+
+      // When dark becomes ready, snap it to the last camera so it matches instantly.
       try { darkMap.jumpTo(lastCamRef.current); } catch {}
     };
     darkMap.once("idle", onDarkIdle);
 
-    // ----- Helpers to set paint safely on overlay -----
+    // -----------------------------
+    // 6) Helpers for overlay styling
+    // -----------------------------
     const safeSetPaint = (layerId, prop, value) => {
       try {
         if (!overlayMap.getLayer(layerId)) return;
@@ -109,19 +171,22 @@ export default function MapStack({
       } catch {}
     };
 
+    // Add lighting layers (load GeoJSON once, then add glow lines)
     const addLights = async () => {
-      // Blackout layer FIRST, default to 1 to prevent any flash during load
+      // Black screen layer used for the “night” effect
       if (!overlayMap.getLayer("blackout")) {
         overlayMap.addLayer({
           id: "blackout",
           type: "background",
           paint: {
             "background-color": "#000",
+            // I start at 1 so there’s no flash while data/layers are loading
             "background-opacity": 1,
           },
         });
       }
 
+      // Fetch the lit roads GeoJSON once and cache it
       if (!litDataRef.current) {
         onStatus("Loading lit roads…");
         const url = `${import.meta.env.BASE_URL}data/lit_web.geojson`;
@@ -133,16 +198,20 @@ export default function MapStack({
         litDataRef.current = await res.json();
       }
 
+      // Create a GeoJSON source for lit roads
       if (!overlayMap.getSource("lit-roads")) {
         overlayMap.addSource("lit-roads", { type: "geojson", data: litDataRef.current });
       }
 
+      // Only show features tagged lit = yes
       const LIT_FILTER = ["==", ["get", "lit"], "yes"];
 
+      // Simple glow palette (core + halos)
       const coreColor = "#FFF0C2";
       const glowColor = "#FF9C2A";
       const bloomColor = "#FF7A00";
 
+      // Helper for adding each glow layer
       const add = (id, color, widthExpr, blur) => {
         if (overlayMap.getLayer(id)) return;
         overlayMap.addLayer({
@@ -153,15 +222,20 @@ export default function MapStack({
           layout: { "line-cap": "round", "line-join": "round" },
           paint: {
             "line-color": color,
+            // Width changes with zoom so it always looks “glowy” but readable
             "line-width": widthExpr,
             "line-blur": blur,
+            // Opacity gets driven by React (lightsOpacity)
             "line-opacity": 0,
           },
         });
       };
 
+      // Big blurry outer glows
       add("lit-glow-3", bloomColor, ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 14, 17, 30], 14);
       add("lit-glow-2", glowColor,  ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 10, 17, 22], 10);
+
+      // Smaller inner glows + core
       add("lit-glow-1", glowColor,  ["interpolate", ["linear"], ["zoom"], 10, 2.5, 14, 6, 17, 14], 5);
       add("lit-core",   coreColor,  ["interpolate", ["linear"], ["zoom"], 10, 1.0, 14, 2.2, 17, 5], 0.8);
 
@@ -169,11 +243,12 @@ export default function MapStack({
       return true;
     };
 
+    // Wait for overlay to load, then add lighting layers
     overlayMap.once("load", async () => {
       const ok = await addLights();
       if (!ok || dead) return;
 
-      // apply initial props once layers exist
+      // Apply initial visual state (from React props)
       const bo = clamp01(asNumber(blackoutOpacity, 0));
       const lo = clamp01(asNumber(lightsOpacity, 0));
       safeSetPaint("blackout", "background-opacity", bo);
@@ -183,9 +258,14 @@ export default function MapStack({
       safeSetPaint("lit-core",   "line-opacity", lo * 0.95);
     });
 
-    // ----- THE IMPORTANT PART: lock basemaps to overlay CAMERA ON EVERY MOVE -----
+    // -----------------------------
+    // 7) Keep basemaps locked to overlay
+    // -----------------------------
+    // Overlay is the “driver”. Basemaps follow it instantly.
     const syncBasemapsToOverlay = () => {
       const c = overlayMap.getCenter();
+
+      // Camera snapshot from overlay
       const cam = {
         center: [c.lng, c.lat],
         zoom: overlayMap.getZoom(),
@@ -193,13 +273,15 @@ export default function MapStack({
         pitch: overlayMap.getPitch(),
       };
 
+      // Store for later (used when dark map becomes ready)
       lastCamRef.current = cam;
 
-      // If a style isn't fully ready yet, jumpTo can be ignored — so check styleLoaded
+      // Avoid jumpTo before styles are loaded (it can be ignored)
       try { if (dayMap.isStyleLoaded()) dayMap.jumpTo(cam); } catch {}
       try { if (darkMap.isStyleLoaded()) darkMap.jumpTo(cam); } catch {}
     };
 
+    // I still keep React state updated, but throttled (so it stays smooth)
     const emitReactThrottled = () => {
       if (rafRef.current) return;
       rafRef.current = requestAnimationFrame(() => {
@@ -215,16 +297,23 @@ export default function MapStack({
       });
     };
 
+    // Attach move handlers (drag/zoom/rotate)
     overlayMap.on("move", syncBasemapsToOverlay);
     overlayMap.on("move", emitReactThrottled);
 
+    // -----------------------------
+    // 8) Cleanup
+    // -----------------------------
     return () => {
       dead = true;
+
       window.removeEventListener("resize", resizeAll);
 
       try { overlayMap.off("move", syncBasemapsToOverlay); } catch {}
       try { overlayMap.off("move", emitReactThrottled); } catch {}
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+
+      try { darkMap.off("styledata", onDarkStyleData); } catch {}
 
       try { dayMap.remove(); } catch {}
       try { darkMap.remove(); } catch {}
@@ -237,10 +326,14 @@ export default function MapStack({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // create once
 
-  // Update overlay paints when opacities change
+  // -----------------------------
+  // 9) React -> Map paint updates
+  // -----------------------------
+  // Update blackout opacity (night mask)
   useEffect(() => {
     const overlayMap = overlayRef.current;
     if (!overlayMap) return;
+
     try {
       if (overlayMap.getLayer("blackout")) {
         overlayMap.setPaintProperty(
@@ -252,11 +345,13 @@ export default function MapStack({
     } catch {}
   }, [blackoutOpacity]);
 
+  // Update the glow opacities when lightsOpacity changes
   useEffect(() => {
     const overlayMap = overlayRef.current;
     if (!overlayMap) return;
 
     const lo = clamp01(asNumber(lightsOpacity, 0));
+
     try {
       if (overlayMap.getLayer("lit-glow-3")) overlayMap.setPaintProperty("lit-glow-3", "line-opacity", lo * 0.18);
       if (overlayMap.getLayer("lit-glow-2")) overlayMap.setPaintProperty("lit-glow-2", "line-opacity", lo * 0.30);
@@ -265,12 +360,18 @@ export default function MapStack({
     } catch {}
   }, [lightsOpacity]);
 
+  // -----------------------------
+  // 10) Render the three canvases
+  // -----------------------------
   return (
     <div className="absolute inset-0">
-      {/* Day basemap */}
-      <div ref={dayEl} style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
+      {/* Day basemap canvas */}
+      <div
+        ref={dayEl}
+        style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+      />
 
-      {/* Dark basemap (fade in only once it has idled at least once to prevent flash) */}
+      {/* Dark basemap canvas (only visible once it has idled at least once) */}
       <div
         ref={darkEl}
         style={{
@@ -282,8 +383,11 @@ export default function MapStack({
         }}
       />
 
-      {/* Interactive overlay */}
-      <div ref={overlayEl} style={{ position: "absolute", inset: 0, pointerEvents: "auto" }} />
+      {/* Overlay canvas (interactive) */}
+      <div
+        ref={overlayEl}
+        style={{ position: "absolute", inset: 0, pointerEvents: "auto" }}
+      />
     </div>
   );
 }

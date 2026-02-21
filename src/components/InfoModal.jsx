@@ -28,11 +28,11 @@ export default function InfoModal({ open, onClose }) {
       role="dialog"
       aria-modal="true"
       aria-label="Project information"
-      onClick={onClose} // click outside to close
+      onClick={onClose}
     >
       <div
         className="w-full max-w-2xl rounded-2xl border border-white/15 bg-black/70 p-6 text-white backdrop-blur"
-        onClick={(e) => e.stopPropagation()} // prevent close when clicking inside
+        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-3">
@@ -75,8 +75,9 @@ export default function InfoModal({ open, onClose }) {
             <span className="font-medium">not</span> to imply that unlit roads{" "}
             <span className="font-medium">cause</span> crime, but to provide
             spatial insight into where roads are tagged as lit or unlit in
-            OpenStreetMap, and to encourage discussion about how environmental
-            conditions intersect with people’s sense of safety.
+            OpenStreetMap, and to encourage reflection on how urban space is
+            experienced at night, and how its design can influence feelings of
+            safety or exposure.
           </p>
 
           {/* External Link Box */}
@@ -93,13 +94,13 @@ export default function InfoModal({ open, onClose }) {
             >
               Read news article for context ↗
             </a>
-            
+
             <p className="mt-2 text-xs text-white/55">
-            The linked article discusses violence and may be distressing to some readers.
+              The linked article discusses violence and may be distressing to some readers.
             </p>
 
             <p className="mt-1 text-xs text-white/40">
-            Opens in a new tab.
+              Opens in a new tab.
             </p>
           </div>
         </div>

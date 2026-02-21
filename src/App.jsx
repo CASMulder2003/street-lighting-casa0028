@@ -1,8 +1,7 @@
-// src/App.jsx
 import { useRef, useState } from "react";
 import TitleBar from "./components/TitleBar.jsx";
 import MapStack from "./components/MapStack.jsx";
-import InfoModal from "./components/InfoModal.jsx"; // <-- add this
+import InfoModal from "./components/InfoModal.jsx"; 
 
 function clamp01(x) {
   return Math.max(0, Math.min(1, x));

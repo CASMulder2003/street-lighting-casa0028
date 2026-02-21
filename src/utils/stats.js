@@ -1,11 +1,15 @@
-// src/utils/stats.js
-// Pure geo utilities for fast, viewport-based stats (no external deps).
+// As I wasn't fully sure how to do a lot of the math, 
+// I used ChatGPT to help me compute here
 
+// Clamp a number into the range 0–1 (useful for animation/opacity values).
 export const clamp01 = (x) => Math.max(0, Math.min(1, x));
 
-const R = 6371000; // meters
+// Earth radius in meters (used for distance calculations).
+const R = 6371000;
 const toRad = (d) => (d * Math.PI) / 180;
 
+// Distance (meters) between two lon/lat points using the Haversine formula.
+// This is an approximation, but accurate enough for line-length totals here.
 export function haversineMeters(aLng, aLat, bLng, bLat) {
   const dLat = toRad(bLat - aLat);
   const dLng = toRad(bLng - aLng);
@@ -22,6 +26,7 @@ export function haversineMeters(aLng, aLat, bLng, bLat) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+// Total length (meters) of a LineString coordinate array.
 export function lineLengthMeters(coords) {
   let sum = 0;
   for (let i = 1; i < coords.length; i++) {
@@ -32,6 +37,7 @@ export function lineLengthMeters(coords) {
   return sum;
 }
 
+// Total length (meters) of a GeoJSON LineString or MultiLineString geometry.
 export function geomLengthMeters(geom) {
   if (!geom) return 0;
   if (geom.type === "LineString") return lineLengthMeters(geom.coordinates);
@@ -43,7 +49,8 @@ export function geomLengthMeters(geom) {
   return 0;
 }
 
-// returns [minLng, minLat, maxLng, maxLat]
+// Bounding box for a LineString or MultiLineString.
+// Returns [minLng, minLat, maxLng, maxLat] (or null if unsupported).
 export function geomBBox(geom) {
   let minLng = Infinity,
     minLat = Infinity,
@@ -73,11 +80,15 @@ export function geomBBox(geom) {
   return [minLng, minLat, maxLng, maxLat];
 }
 
+// Quick bbox overlap test.
+// Used to filter features before doing any heavier checks.
 export function bboxIntersects(a, b) {
   return !(a[2] < b[0] || a[0] > b[2] || a[3] < b[1] || a[1] > b[3]);
 }
 
-// --- Stable-ish geometry hash for matching lit lines to road lines ---
+// --- Geometry hashing (used to match a road segment to a lit segment) ---
+// We create a short hash from the coordinates (rounded to reduce float noise).
+
 function hashLineCoords(coords) {
   let s = "";
   for (let i = 0; i < coords.length; i++) {
@@ -85,12 +96,14 @@ function hashLineCoords(coords) {
     const lat = Math.round(coords[i][1] * 1e6) / 1e6;
     s += `${lng},${lat};`;
   }
-  // djb2-ish
+
+  // Simple string hash (fast; good enough for matching here)
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
   return (h >>> 0).toString(16);
 }
 
+// Returns a stable-ish hash for LineString/MultiLineString features (or null).
 export function featureGeomHash(feature) {
   const g = feature?.geometry;
   if (!g) return null;
@@ -109,6 +122,7 @@ export function featureGeomHash(feature) {
   return null;
 }
 
+// Build a Set of hashes for lit features so we can do fast lookups.
 export function buildLitHashSet(litFeatureCollection) {
   const set = new Set();
   const feats = litFeatureCollection?.features || [];
@@ -119,6 +133,11 @@ export function buildLitHashSet(litFeatureCollection) {
   return set;
 }
 
+// Add precomputed values onto each road feature:
+// - __bbox: bounding box
+// - __len_m: length in meters
+// - __hash: geometry hash
+// This makes per-move stats much faster.
 export function annotateRoadFeatures(roadsFeatureCollection) {
   const feats = roadsFeatureCollection?.features || [];
   for (const f of feats) {
@@ -130,8 +149,10 @@ export function annotateRoadFeatures(roadsFeatureCollection) {
   }
 }
 
+// Main stats function used by the UI overlay.
+// It totals road length in the current bbox, and counts how much of it is lit.
 export function computeViewportStatsFromRoads({
-  boundsBBox, // [w,s,e,n]
+  boundsBBox, // [west, south, east, north]
   roadsFeatureCollection,
   litHashSet,
 }) {
@@ -151,8 +172,11 @@ export function computeViewportStatsFromRoads({
 
     totalM += len;
 
-    // if you ever bake lit directly into roads, this also works
-    const litTagged = p?.lit === "yes" || (p?.__hash && litHashSet?.has(p.__hash));
+    // Treat a road as lit if:
+    // - it already has lit=yes on the road feature, OR
+    // - its geometry hash exists in the lit dataset Set
+    const litTagged =
+      p?.lit === "yes" || (p?.__hash && litHashSet?.has(p.__hash));
     if (litTagged) litM += len;
   }
 

@@ -1,27 +1,48 @@
 import { useEffect, useState } from "react";
 
+/**
+ * The modal is used for:
+ * 1) explaining the motivation/context for the project
+ * 2) giving quick "how to use" instructions (so users understand what you can do and mentioning data limitations)
+ *
+ * Props:
+ * - open: boolean controlling whether the modal is visible
+ * - onClose: function called when the user dismisses the modal
+ */
+
 export default function InfoModal({ open, onClose }) {
+  // Which tab is currently active inside the modal.
+  // Keeping this as local state keeps the App clean and makes the modal self-contained.
   const [tab, setTab] = useState("context"); // "context" | "howto"
 
   useEffect(() => {
     if (!open) return;
 
-    // Reset tab each time modal opens (optional, but usually nicer UX)
+    // To reset to the first tab so it always starts consistently.
     setTab("context");
 
+    // Escape buttom to close infomodal.
     const handleKeyDown = (e) => {
       if (e.key === "Escape") onClose();
     };
 
     window.addEventListener("keydown", handleKeyDown);
+
+    // Cleanup: remove the listener when the modal closes/unmounts.
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, onClose]);
 
+  // Don't render anything if closed (keeps DOM clean and avoids focus issues).
   if (!open) return null;
 
+  // External link to revelant English news article.
   const articleUrl =
     "https://www.euronews.com/2025/08/22/death-of-a-17-year-old-teenager-in-the-netherlands-sparks-outrage-over-violence-against-wo";
 
+  /**
+   * Small helper for rendering a tab button with consistent styling.
+   * "aria-pressed" makes the selected state clearer for assistive tech.
+   */
   const tabBtn = (key, label) => {
     const active = tab === key;
     return (
@@ -29,8 +50,11 @@ export default function InfoModal({ open, onClose }) {
         type="button"
         onClick={() => setTab(key)}
         className={[
+          // Slightly larger hit area so it's easy to click
           "rounded-lg px-4 py-2 text-sm border transition-all duration-150",
+          // Keyboard focus styling (important for accessibility)
           "focus:outline-none focus:ring-1 focus:ring-white/30",
+          // Active vs inactive styling
           active
             ? "border-white/30 bg-white/10 text-white"
             : "border-white/10 bg-black/30 text-white/70 hover:border-white/20 hover:text-white/90 hover:bg-white/5",
@@ -43,6 +67,7 @@ export default function InfoModal({ open, onClose }) {
   };
 
   return (
+    // Backdrop: clicking outside the modal closes it.
     <div
       className="absolute inset-0 z-[60] grid place-items-center bg-black/60 p-4"
       role="dialog"
@@ -50,6 +75,7 @@ export default function InfoModal({ open, onClose }) {
       aria-label="Project information"
       onClick={onClose}
     >
+      {/* Modal card. stopPropagation prevents backdrop clicks closing it when clicking inside. */}
       <div
         className="w-full max-w-2xl rounded-2xl border border-white/15 bg-black/70 p-6 text-white backdrop-blur"
         onClick={(e) => e.stopPropagation()}
@@ -58,11 +84,10 @@ export default function InfoModal({ open, onClose }) {
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold">Amsterdam Night Lighting</h2>
-            <p className="mt-1 text-xs text-white/60">
-              Project information
-            </p>
+            <p className="mt-1 text-xs text-white/60">Project information</p>
           </div>
 
+          {/* close button */}
           <button
             className="rounded-lg border border-white/20 bg-black/40 px-3 py-1 text-sm hover:border-white/30"
             onClick={onClose}
@@ -80,9 +105,10 @@ export default function InfoModal({ open, onClose }) {
 
         <hr className="border-white/10 my-4" />
 
-        {/* Body */}
+        {/* Body: switch content based on the active tab */}
         {tab === "context" ? (
           <div className="space-y-4 text-sm text-white/85 leading-relaxed">
+            {/* Background / motivation */}
             <p>
               This project was inspired by discussions about{" "}
               <span className="font-medium">urban safety</span> and{" "}
@@ -95,6 +121,7 @@ export default function InfoModal({ open, onClose }) {
               <span className="font-medium">lighting and perceived safety</span>.
             </p>
 
+            {/* Aim / scope note (important to avoid implying causality) */}
             <p>
               The goal of this visualization is{" "}
               <span className="font-medium">not</span> to imply that unlit roads{" "}
@@ -130,6 +157,7 @@ export default function InfoModal({ open, onClose }) {
           </div>
         ) : (
           <div className="space-y-4 text-sm text-white/85 leading-relaxed">
+            {/* Quick usage instructions so it is hopefully more user-friendly */}
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
               <div className="text-xs uppercase tracking-wide text-white/60">
                 How to explore
@@ -137,8 +165,9 @@ export default function InfoModal({ open, onClose }) {
 
               <ul className="mt-2 space-y-1 text-xs text-white/65 leading-relaxed">
                 <li>
-                  • Use <span className="text-white/80">Show night lights</span>{" "}
-                  to reveal mapped lit roads.
+                  • Use{" "}
+                  <span className="text-white/80">Show night lights</span> to
+                  reveal mapped lit roads.
                 </li>
                 <li>
                   • Toggle <span className="text-white/80">Show full map</span>{" "}
@@ -148,10 +177,13 @@ export default function InfoModal({ open, onClose }) {
                   • Pan and zoom to compare how lighting coverage varies by
                   area.
                 </li>
-                <li>• The “In view” percentage updates as you move the map.</li>
+                <li>
+                  • The “In view” percentage updates as you move the map.
+                </li>
               </ul>
             </div>
 
+            {/* Mention of data limitation - issues with OSM data */}
             <p className="text-xs text-white/45 leading-relaxed">
               <span className="text-white/60 font-medium">Note:</span> Street
               lighting tags are derived from volunteered OpenStreetMap data.

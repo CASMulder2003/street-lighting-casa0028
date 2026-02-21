@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import TitleBar from "./components/TitleBar.jsx";
 import DualMapStack from "./components/DualMapStack.jsx";
 import InfoModal from "./components/InfoModal.jsx";
+import ViewportStats from "./components/ViewportStats.jsx";
 
 function clamp01(x) {
   return Math.max(0, Math.min(1, x));
@@ -32,80 +33,72 @@ export default function App() {
   });
 
   // Visual states
-  // topOpacity controls crossfade between day-map (bottom) and night-map (top)
-  const [topOpacity, setTopOpacity] = useState(0); // 0=day visible, 1=night stack visible
-  const [lightsOpacity, setLightsOpacity] = useState(0); // street lights in top map
-  const [blackoutOpacity, setBlackoutOpacity] = useState(0); // dim-mask in top map (0..1)
+  const [topOpacity, setTopOpacity] = useState(0);
+  const [lightsOpacity, setLightsOpacity] = useState(0);
+  const [blackoutOpacity, setBlackoutOpacity] = useState(0);
 
   const [status, setStatus] = useState("Ready");
   const [isInfoOpen, setIsInfoOpen] = useState(false);
+
+  // NEW: derived viewport stats (computed in DualMapStack via utils/stats.js)
+  const [viewportStats, setViewportStats] = useState(null);
 
   const runningRef = useRef(false);
 
   const isNightMode = topOpacity > 0.5;
 
+  // Show stats only when user has revealed the basemap (i.e., not full black)
+  // Your "full map" state sets blackoutOpacity to ~0.15
+  const showStats = isNightMode && blackoutOpacity < 0.5;
+
   // -----------------------
-  // TRANSITIONS (NO setStyle ANYWHERE)
+  // TRANSITIONS
   // -----------------------
 
-  // Day -> Night (black + lights)
   const toNight = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
     setStatus("Transition: Day → Night");
 
-    // IMPORTANT: ensure the top map is BLACK before it becomes visible
     setBlackoutOpacity(1);
     setLightsOpacity(0);
 
-    // Crossfade to top map (fast, so you don't see double maps)
     await tween(setTopOpacity, topOpacity, 1, 350);
-
-    // Now fade lights in (this is the visible "reveal")
     await tween(setLightsOpacity, 0, 1, 2200);
 
     setStatus("Ready");
     runningRef.current = false;
   };
 
-  // Night -> Day (no black frame)
   const toDay = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
     setStatus("Transition: Night → Day");
 
-    // Fade lights out first
     await tween(setLightsOpacity, lightsOpacity, 0, 900);
-
-    // Crossfade back to day map (bottom map is already there)
     await tween(setTopOpacity, topOpacity, 0, 450);
 
-    // Reset for next time (optional but keeps state clean)
     setBlackoutOpacity(0);
 
     setStatus("Ready");
     runningRef.current = false;
   };
 
-  // Night black -> show dark basemap behind (full map)
   const toFull = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
 
     setStatus("Transition: Night → Full map");
 
-    // Ensure top visible and lights on
     if (topOpacity < 1) await tween(setTopOpacity, topOpacity, 1, 250);
     if (lightsOpacity < 1) await tween(setLightsOpacity, lightsOpacity, 1, 500);
 
-    // Reveal basemap behind by lowering the mask
     await tween(setBlackoutOpacity, blackoutOpacity, 0.15, 700);
 
     setStatus("Ready");
     runningRef.current = false;
   };
 
-  // Full map -> back to black night
   const fullToNight = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
@@ -119,7 +112,7 @@ export default function App() {
   };
 
   // -----------------------
-  // BUTTON LOGIC (same UX as before)
+  // BUTTON LOGIC
   // -----------------------
 
   const mainLabel = isNightMode ? "Back to day" : "Show night lights";
@@ -144,6 +137,7 @@ export default function App() {
         lightsOpacity={lightsOpacity}
         blackoutOpacity={blackoutOpacity}
         onStatus={setStatus}
+        onViewportStats={setViewportStats} // NEW
       />
 
       <TitleBar
@@ -180,6 +174,9 @@ export default function App() {
       <div className="absolute left-4 top-20 z-50 text-xs text-white/70">
         {status}
       </div>
+
+      {/* Only show derived stats when the basemap is visible (full map mode) */}
+      <ViewportStats visible={showStats} stats={viewportStats} />
 
       <InfoModal open={isInfoOpen} onClose={() => setIsInfoOpen(false)} />
     </div>

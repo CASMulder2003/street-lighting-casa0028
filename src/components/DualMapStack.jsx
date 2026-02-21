@@ -2,6 +2,12 @@ import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
+import {
+  buildLitHashSet,
+  annotateRoadFeatures,
+  computeViewportStatsFromRoads,
+} from "../utils/stats.js";
+
 const STYLE_DAY =
   "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const STYLE_DARK =
@@ -34,10 +40,11 @@ const WORLD_MASK = {
 export default function DualMapStack({
   view,
   onView,
-  topOpacity, // CSS fade for night map (0..1)
+  topOpacity,
   lightsOpacity,
   blackoutOpacity,
   onStatus = () => {},
+  onViewportStats = () => {},
 }) {
   const dayRef = useRef(null);
   const nightRef = useRef(null);
@@ -45,7 +52,10 @@ export default function DualMapStack({
   const dayMapRef = useRef(null);
   const nightMapRef = useRef(null);
 
+  const roadsDataRef = useRef(null);
   const litDataRef = useRef(null);
+  const litHashSetRef = useRef(null);
+
   const rafRef = useRef(null);
   const syncingRef = useRef(false);
 
@@ -63,7 +73,6 @@ export default function DualMapStack({
   };
 
   const ensureNightLayers = async (map) => {
-    // blackout mask
     if (!map.getSource("world-mask")) {
       map.addSource("world-mask", { type: "geojson", data: WORLD_MASK });
     }
@@ -76,15 +85,26 @@ export default function DualMapStack({
       });
     }
 
-    // lights data
-    if (!litDataRef.current) {
-      onStatus("Loading lit roads…");
-      const url = `${import.meta.env.BASE_URL}data/lit_web.geojson`;
-      const res = await fetch(url);
-      if (!res.ok) return;
-      litDataRef.current = await res.json();
+    // Load both datasets once, and prepare for stats
+    if (!roadsDataRef.current || !litDataRef.current || !litHashSetRef.current) {
+      onStatus("Loading road + lighting data…");
+
+      const base = import.meta.env.BASE_URL;
+      const [roadsRes, litRes] = await Promise.all([
+        fetch(`${base}data/roads_web.geojson`),
+        fetch(`${base}data/lit_web.geojson`),
+      ]);
+
+      if (!roadsRes.ok || !litRes.ok) return;
+
+      roadsDataRef.current = await roadsRes.json();
+      litDataRef.current = await litRes.json();
+
+      litHashSetRef.current = buildLitHashSet(litDataRef.current);
+      annotateRoadFeatures(roadsDataRef.current);
     }
 
+    // Glow layers use lit_web.geojson
     if (!map.getSource("lit-roads")) {
       map.addSource("lit-roads", { type: "geojson", data: litDataRef.current });
     }
@@ -107,10 +127,30 @@ export default function DualMapStack({
       });
     };
 
-    addLine("lit-glow-3", "#FF7A00", ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 14, 17, 30], 14);
-    addLine("lit-glow-2", "#FF9C2A", ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 10, 17, 22], 10);
-    addLine("lit-glow-1", "#FF9C2A", ["interpolate", ["linear"], ["zoom"], 10, 2.5, 14, 6, 17, 14], 5);
-    addLine("lit-core",   "#FFF0C2", ["interpolate", ["linear"], ["zoom"], 10, 1, 14, 2.2, 17, 5], 0.8);
+    addLine(
+      "lit-glow-3",
+      "#FF7A00",
+      ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 14, 17, 30],
+      14
+    );
+    addLine(
+      "lit-glow-2",
+      "#FF9C2A",
+      ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 10, 17, 22],
+      10
+    );
+    addLine(
+      "lit-glow-1",
+      "#FF9C2A",
+      ["interpolate", ["linear"], ["zoom"], 10, 2.5, 14, 6, 17, 14],
+      5
+    );
+    addLine(
+      "lit-core",
+      "#FFF0C2",
+      ["interpolate", ["linear"], ["zoom"], 10, 1, 14, 2.2, 17, 5],
+      0.8
+    );
 
     onStatus("Ready");
   };
@@ -150,8 +190,26 @@ export default function DualMapStack({
     syncingRef.current = false;
   };
 
+  const computeViewportStats = () => {
+    const map = nightMapRef.current;
+    const roadsFC = roadsDataRef.current;
+    const litSet = litHashSetRef.current;
+
+    if (!map || !roadsFC || !litSet) return;
+
+    const b = map.getBounds();
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+
+    const stats = computeViewportStatsFromRoads({
+      boundsBBox: bbox,
+      roadsFeatureCollection: roadsFC,
+      litHashSet: litSet,
+    });
+
+    onViewportStats(stats);
+  };
+
   useEffect(() => {
-    // Day map (bottom, not interactive)
     const dayMap = new maplibregl.Map({
       container: dayRef.current,
       style: STYLE_DAY,
@@ -164,7 +222,6 @@ export default function DualMapStack({
     });
     dayMapRef.current = dayMap;
 
-    // Night map (top, interactive)
     const nightMap = new maplibregl.Map({
       container: nightRef.current,
       style: STYLE_DARK,
@@ -181,6 +238,7 @@ export default function DualMapStack({
       if (rafRef.current) return;
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null;
+
         const c = nightMap.getCenter();
         onView({
           lng: c.lng,
@@ -189,6 +247,8 @@ export default function DualMapStack({
           bearing: nightMap.getBearing(),
           pitch: nightMap.getPitch(),
         });
+
+        computeViewportStats();
       });
     };
 
@@ -199,7 +259,6 @@ export default function DualMapStack({
     });
 
     dayMap.on("load", () => {
-      // ensure it matches immediately
       syncCamera(nightMap, dayMap);
     });
 
@@ -207,17 +266,21 @@ export default function DualMapStack({
       await ensureNightLayers(nightMap);
       hidePlaceNames(nightMap);
       applyNightVisuals();
+      computeViewportStats();
     });
 
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      try { nightMap.remove(); } catch {}
-      try { dayMap.remove(); } catch {}
+      try {
+        nightMap.remove();
+      } catch {}
+      try {
+        dayMap.remove();
+      } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // update night visuals whenever values change
   useEffect(() => {
     applyNightVisuals();
   }, [lightsOpacity, blackoutOpacity]);
@@ -226,13 +289,8 @@ export default function DualMapStack({
 
   return (
     <div style={{ position: "absolute", inset: 0 }}>
-      {/* Bottom day map */}
-      <div
-        ref={dayRef}
-        style={{ position: "absolute", inset: 0, zIndex: 0 }}
-      />
+      <div ref={dayRef} style={{ position: "absolute", inset: 0, zIndex: 0 }} />
 
-      {/* Top night map (interactive) */}
       <div
         ref={nightRef}
         style={{
@@ -240,7 +298,7 @@ export default function DualMapStack({
           inset: 0,
           zIndex: 1,
           opacity: topOp,
-          transition: "opacity 0ms", // controlled by tween in App; no CSS easing conflicts
+          transition: "opacity 0ms",
         }}
       />
     </div>

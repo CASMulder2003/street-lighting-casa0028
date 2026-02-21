@@ -1,14 +1,12 @@
 import { useRef, useState } from "react";
 import TitleBar from "./components/TitleBar.jsx";
-import MapStack from "./components/MapStack.jsx";
-import InfoModal from "./components/InfoModal.jsx"; 
+import DualMapStack from "./components/DualMapStack.jsx";
+import InfoModal from "./components/InfoModal.jsx";
 
 function clamp01(x) {
   return Math.max(0, Math.min(1, x));
 }
-function wait(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+
 function tween(setter, from, to, durationMs) {
   return new Promise((resolve) => {
     const start = performance.now();
@@ -24,6 +22,7 @@ function tween(setter, from, to, durationMs) {
 }
 
 export default function App() {
+  // Camera state
   const [view, setView] = useState({
     lng: 4.9,
     lat: 52.37,
@@ -32,100 +31,118 @@ export default function App() {
     pitch: 0,
   });
 
-  const [lightsOpacity, setLightsOpacity] = useState(0);
-  const [blackoutOpacity, setBlackoutOpacity] = useState(0);
-  const [darkMapOpacity, setDarkMapOpacity] = useState(0);
+  // Visual states
+  // topOpacity controls crossfade between day-map (bottom) and night-map (top)
+  const [topOpacity, setTopOpacity] = useState(0); // 0=day visible, 1=night stack visible
+  const [lightsOpacity, setLightsOpacity] = useState(0); // street lights in top map
+  const [blackoutOpacity, setBlackoutOpacity] = useState(0); // dim-mask in top map (0..1)
 
-  const [mode, setMode] = useState("day");
   const [status, setStatus] = useState("Ready");
-
   const [isInfoOpen, setIsInfoOpen] = useState(false);
 
   const runningRef = useRef(false);
 
-  // ---- TRANSITIONS ----
+  const isNightMode = topOpacity > 0.5;
+
+  // -----------------------
+  // TRANSITIONS (NO setStyle ANYWHERE)
+  // -----------------------
+
+  // Day -> Night (black + lights)
   const toNight = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
-
     setStatus("Transition: Day → Night");
-    setMode("night");
-    setDarkMapOpacity(0);
 
-    await tween(setBlackoutOpacity, blackoutOpacity, 1, 900);
-    await wait(120);
-    await tween(setLightsOpacity, lightsOpacity, 1, 1200);
+    // IMPORTANT: ensure the top map is BLACK before it becomes visible
+    setBlackoutOpacity(1);
+    setLightsOpacity(0);
+
+    // Crossfade to top map (fast, so you don't see double maps)
+    await tween(setTopOpacity, topOpacity, 1, 350);
+
+    // Now fade lights in (this is the visible "reveal")
+    await tween(setLightsOpacity, 0, 1, 2200);
 
     setStatus("Ready");
     runningRef.current = false;
   };
 
+  // Night -> Day (no black frame)
+  const toDay = async () => {
+    if (runningRef.current) return;
+    runningRef.current = true;
+    setStatus("Transition: Night → Day");
+
+    // Fade lights out first
+    await tween(setLightsOpacity, lightsOpacity, 0, 900);
+
+    // Crossfade back to day map (bottom map is already there)
+    await tween(setTopOpacity, topOpacity, 0, 450);
+
+    // Reset for next time (optional but keeps state clean)
+    setBlackoutOpacity(0);
+
+    setStatus("Ready");
+    runningRef.current = false;
+  };
+
+  // Night black -> show dark basemap behind (full map)
   const toFull = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
 
     setStatus("Transition: Night → Full map");
-    setMode("full");
 
-    if (lightsOpacity < 1) await tween(setLightsOpacity, lightsOpacity, 1, 300);
+    // Ensure top visible and lights on
+    if (topOpacity < 1) await tween(setTopOpacity, topOpacity, 1, 250);
+    if (lightsOpacity < 1) await tween(setLightsOpacity, lightsOpacity, 1, 500);
 
-    await tween(setDarkMapOpacity, darkMapOpacity, 1, 500);
-    await tween(setBlackoutOpacity, blackoutOpacity, 0.15, 450);
+    // Reveal basemap behind by lowering the mask
+    await tween(setBlackoutOpacity, blackoutOpacity, 0.15, 700);
 
     setStatus("Ready");
     runningRef.current = false;
   };
 
+  // Full map -> back to black night
   const fullToNight = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
 
     setStatus("Transition: Full map → Night");
-    setMode("night");
 
-    await tween(setBlackoutOpacity, blackoutOpacity, 1, 250);
-    await wait(60);
-    await tween(setDarkMapOpacity, darkMapOpacity, 0, 450);
-    await tween(setBlackoutOpacity, blackoutOpacity, 1, 200);
+    await tween(setBlackoutOpacity, blackoutOpacity, 1, 500);
 
     setStatus("Ready");
     runningRef.current = false;
   };
 
-  const toDay = async () => {
-    if (runningRef.current) return;
-    runningRef.current = true;
+  // -----------------------
+  // BUTTON LOGIC (same UX as before)
+  // -----------------------
 
-    setStatus("Transition: Back to Day");
-    setMode("day");
+  const mainLabel = isNightMode ? "Back to day" : "Show night lights";
+  const mainAction = isNightMode ? toDay : toNight;
 
-    await tween(setLightsOpacity, lightsOpacity, 0, 600);
-    await wait(80);
-    await tween(setDarkMapOpacity, darkMapOpacity, 0, 400);
-    await tween(setBlackoutOpacity, blackoutOpacity, 0, 650);
+  const contextLabel =
+    blackoutOpacity < 0.5 ? "Hide full map" : "Show full map";
 
-    setStatus("Ready");
-    runningRef.current = false;
-  };
+  const contextDisabled = !isNightMode || runningRef.current;
 
-  const mainLabel = mode === "day" ? "Show night lights" : "Back to day";
-  const mainAction = mode === "day" ? toNight : toDay;
-
-  const contextLabel = mode === "full" ? "Hide full map" : "Show full map";
-  const contextDisabled = mode === "day" || runningRef.current;
   const contextAction = () => {
-    if (mode === "night") return toFull();
-    if (mode === "full") return fullToNight();
+    if (blackoutOpacity >= 0.9) return toFull();
+    if (blackoutOpacity < 0.5) return fullToNight();
   };
 
   return (
     <div className="fixed inset-0 bg-black overflow-hidden">
-      <MapStack
+      <DualMapStack
         view={view}
         onView={setView}
+        topOpacity={topOpacity}
         lightsOpacity={lightsOpacity}
         blackoutOpacity={blackoutOpacity}
-        darkMapOpacity={darkMapOpacity}
         onStatus={setStatus}
       />
 
@@ -137,7 +154,6 @@ export default function App() {
               className="rounded-lg border border-white/20 bg-black/40 px-3 py-2 text-sm hover:border-white/30 disabled:opacity-40"
               disabled={runningRef.current}
               onClick={mainAction}
-              title={mainLabel}
             >
               {mainLabel}
             </button>
@@ -146,7 +162,6 @@ export default function App() {
               className="rounded-lg border border-white/20 bg-black/40 px-3 py-2 text-sm hover:border-white/30 disabled:opacity-40"
               disabled={contextDisabled}
               onClick={contextAction}
-              title={contextLabel}
             >
               {contextLabel}
             </button>
@@ -154,7 +169,6 @@ export default function App() {
             <button
               className="grid h-10 w-10 place-items-center rounded-full border border-white/20 bg-black/40 text-sm hover:border-white/30"
               onClick={() => setIsInfoOpen(true)}
-              title="Info"
               type="button"
             >
               ?

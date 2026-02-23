@@ -4,31 +4,37 @@ import DualMapStack from "./components/DualMapStack.jsx";
 import InfoModal from "./components/InfoModal.jsx";
 import ViewportStats from "./components/ViewportStats.jsx";
 
-// Clamp helper used by the tween function (keeps values between 0 and 1)
+// I use this to keep animation values between 0 and 1
 function clamp01(x) {
   return Math.max(0, Math.min(1, x));
 }
 
 /**
- * Small animation helper for smoothly transitioning state values.
- * I use this instead of CSS transitions so I can sequence effects (fade map, then fade lights, etc.).
+ * Small animation helper.
+ * I use it to smoothly change React state over time (instead of CSS),
+ * so I can control the order of transitions (fade map, then fade lights).
  */
 function tween(setter, from, to, durationMs) {
   return new Promise((resolve) => {
     const start = performance.now();
+
     function frame(now) {
       const t = clamp01((now - start) / durationMs);
+      // Simple ease-out (starts fast, ends slow)
       const easeOut = t * (2 - t);
+
       setter(from + (to - from) * easeOut);
+
       if (t < 1) requestAnimationFrame(frame);
       else resolve();
     }
+
     requestAnimationFrame(frame);
   });
 }
 
 export default function App() {
-  // Camera state (shared with the MapLibre component)
+  // Current map camera (kept in React so both maps stay in sync)
   const [view, setView] = useState({
     lng: 4.9,
     lat: 52.37,
@@ -37,37 +43,39 @@ export default function App() {
     pitch: 0,
   });
 
-  // Visual state controlling the crossfade + lighting reveal
-  const [topOpacity, setTopOpacity] = useState(0); // 0 = day only, 1 = night map visible
-  const [lightsOpacity, setLightsOpacity] = useState(0); // glow intensity for lit roads
-  const [blackoutOpacity, setBlackoutOpacity] = useState(0); // black mask for “night reveal”
+  // These control the look of the night view
+  const [topOpacity, setTopOpacity] = useState(0); // fades the night map in/out
+  const [lightsOpacity, setLightsOpacity] = useState(0); // controls glow strength
+  const [blackoutOpacity, setBlackoutOpacity] = useState(0); // black “mask” over the night map
 
-  // Small UI state
+  // Simple UI state
   const [status, setStatus] = useState("Ready");
   const [isInfoOpen, setIsInfoOpen] = useState(false);
 
-  // Derived stats for the current viewport (computed inside DualMapStack)
+  // Stats for what’s currently visible in the map view
   const [viewportStats, setViewportStats] = useState(null);
 
-  // Prevent users spamming transitions (avoids conflicting animations)
+  // I use this to stop users clicking buttons mid-animation
   const runningRef = useRef(false);
 
+  // I treat it as “night mode” once the night map is mostly visible
   const isNightMode = topOpacity > 0.5;
 
-  // Only show the stats when the basemap has been revealed behind the lights
-  // (stats make more sense in “context” mode than on a fully black screen)
+  // I only show stats when the basemap is visible behind the lights
+  // (they don’t make much sense when the view is fully black)
   const showStats = isNightMode && blackoutOpacity < 0.5;
 
   // -----------------------
   // TRANSITIONS
   // -----------------------
 
+  // Day → Night: crossfade to night map, then fade the glow in
   const toNight = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
     setStatus("Transition: Day → Night");
 
-    // Start from black, then fade in the glow
+    // Start with a black mask so the first thing you see is the lights
     setBlackoutOpacity(1);
     setLightsOpacity(0);
 
@@ -78,45 +86,46 @@ export default function App() {
     runningRef.current = false;
   };
 
+  // Night → Day: fade lights out, then crossfade back to day map
   const toDay = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
     setStatus("Transition: Night → Day");
 
-    // Fade glow out, then crossfade back to the day map
     await tween(setLightsOpacity, lightsOpacity, 0, 900);
     await tween(setTopOpacity, topOpacity, 0, 450);
 
+    // Reset mask so the next night transition starts clean
     setBlackoutOpacity(0);
 
     setStatus("Ready");
     runningRef.current = false;
   };
 
+  // Night (black) → Full map: lower the black mask so you can see the basemap too
   const toFull = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
 
     setStatus("Transition: Night → Full map");
 
-    // Ensure the night map is visible and the glow is on
+    // Make sure the night map + glow are fully on before revealing the basemap
     if (topOpacity < 1) await tween(setTopOpacity, topOpacity, 1, 250);
     if (lightsOpacity < 1) await tween(setLightsOpacity, lightsOpacity, 1, 500);
 
-    // Reveal the dark basemap behind the lights by lowering the mask
     await tween(setBlackoutOpacity, blackoutOpacity, 0.15, 700);
 
     setStatus("Ready");
     runningRef.current = false;
   };
 
+  // Full map → Night (black): bring the black mask back up
   const fullToNight = async () => {
     if (runningRef.current) return;
     runningRef.current = true;
 
     setStatus("Transition: Full map → Night");
 
-    // Bring the mask back up to return to the black “night reveal” view
     await tween(setBlackoutOpacity, blackoutOpacity, 1, 500);
 
     setStatus("Ready");
@@ -127,12 +136,15 @@ export default function App() {
   // BUTTON LOGIC
   // -----------------------
 
+  // Main button toggles between day and night
   const mainLabel = isNightMode ? "Back to day" : "Show night lights";
   const mainAction = isNightMode ? toDay : toNight;
 
+  // Second button toggles between “black reveal” and “full basemap”
   const contextLabel =
     blackoutOpacity < 0.5 ? "Hide full map" : "Show full map";
 
+  // Only allow the full-map toggle when we are in night mode and not animating
   const contextDisabled = !isNightMode || runningRef.current;
 
   const contextAction = () => {
@@ -142,6 +154,7 @@ export default function App() {
 
   return (
     <div className="fixed inset-0 bg-black overflow-hidden">
+      {/* The map component renders both the day and night maps, plus the glow layers */}
       <DualMapStack
         view={view}
         onView={setView}
@@ -152,6 +165,7 @@ export default function App() {
         onViewportStats={setViewportStats}
       />
 
+      {/* Top bar with buttons (single page, so this works like a “navbar” for controls) */}
       <TitleBar
         title="Amsterdam Night Lighting"
         controls={
@@ -172,6 +186,7 @@ export default function App() {
               {contextLabel}
             </button>
 
+            {/* Info modal button */}
             <button
               className="grid h-10 w-10 place-items-center rounded-full border border-white/20 bg-black/40 text-sm hover:border-white/30"
               onClick={() => setIsInfoOpen(true)}
@@ -183,12 +198,15 @@ export default function App() {
         }
       />
 
+      {/* Small status text for debugging / feedback */}
       <div className="absolute left-4 top-20 z-50 text-xs text-white/70">
         {status}
       </div>
 
+      {/* Viewport stats (only shown in “full map” night mode) */}
       <ViewportStats visible={showStats} stats={viewportStats} />
 
+      {/* Info modal with context + how-to tabs */}
       <InfoModal open={isInfoOpen} onClose={() => setIsInfoOpen(false)} />
     </div>
   );

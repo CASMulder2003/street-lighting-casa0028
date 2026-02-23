@@ -1,6 +1,4 @@
-/**
- * ViewportStats
- *
+/*
  * Small overlay displaying derived lighting metrics
  * for the current map viewport.
  *

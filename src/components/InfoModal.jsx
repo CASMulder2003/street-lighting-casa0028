@@ -28,7 +28,7 @@ export default function InfoModal({ open, onClose }) {
 
     window.addEventListener("keydown", handleKeyDown);
 
-    // Cleanup: remove the listener when the modal closes/unmounts.
+    // Remove the key listener when the modal closes
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, onClose]);
 
@@ -39,10 +39,8 @@ export default function InfoModal({ open, onClose }) {
   const articleUrl =
     "https://www.euronews.com/2025/08/22/death-of-a-17-year-old-teenager-in-the-netherlands-sparks-outrage-over-violence-against-wo";
 
-  /**
-   * Small helper for rendering a tab button with consistent styling.
-   * "aria-pressed" makes the selected state clearer for assistive tech.
-   */
+   // Small helper for rendering a tab button with consistent styling.
+   // "aria-pressed" makes the selected state clearer for assistive tech.
   const tabBtn = (key, label) => {
     const active = tab === key;
     return (
@@ -121,7 +119,7 @@ export default function InfoModal({ open, onClose }) {
               <span className="font-medium">lighting and perceived safety</span>.
             </p>
 
-            {/* Aim / scope note (important to avoid implying causality) */}
+            {/* Aim / scope note */}
             <p>
               The goal of this visualization is{" "}
               <span className="font-medium">not</span> to imply that unlit roads{" "}

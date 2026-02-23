@@ -6,7 +6,7 @@
  *
  * Props:
  * - title: main heading displayed on the left
- * - controls: React elements (buttons) displayed on the right
+ * - controls: buttons displayed on the right
  */
 export default function TitleBar({ title, controls }) {
   return (

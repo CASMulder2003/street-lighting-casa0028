@@ -1,0 +1,180 @@
+---
+title: "Untitled"
+format: html
+editor: visual
+---
+
+## Data Preparation for Data Stories
+
+```{r}
+#| message: false
+#| warning: false
+
+# Install once if needed (uncomment if you haven't installed these before)
+# install.packages(c("sf", "dplyr", "ggplot2", "jsonlite", "units"))
+
+library(osmdata)
+library(sf)
+library(dplyr)
+library(stringr)
+
+```
+
+```{r}
+buurten <- st_read(
+  "https://maps.amsterdam.nl/open_geodata/geojson_lnglat.php?KAARTLAAG=INDELING_BUURT&THEMA=gebiedsindeling",
+  quiet = TRUE
+)
+
+buurten
+```
+
+```{r}
+# Dissolve all buurten into one city boundary
+amsterdam_boundary <- buurten |> 
+  summarise() |> 
+  st_make_valid()
+
+plot(st_geometry(amsterdam_boundary), col = "black")
+
+```
+
+\
+3. Download Street Lamps (The exact lamp posts)
+
+```{r}
+# Reproject buurten to Dutch CRS (meters)
+buurten_proj <- st_transform(buurten, 28992)
+
+# Dissolve into full Amsterdam boundary (multipart is fine)
+amsterdam_boundary_proj <- buurten_proj |>
+  summarise() |>
+  st_make_valid()
+
+# Convert boundary back to WGS84 for bbox querying
+amsterdam_boundary <- st_transform(amsterdam_boundary_proj, 4326)
+
+# Create bounding box for Overpass query
+bb <- st_bbox(amsterdam_boundary)
+
+```
+
+3.  Download the street lamp data
+
+```{r}
+library(osmdata)
+library(sf)
+library(dplyr)
+library(stringr)
+
+set_overpass_url("https://overpass.kumi.systems/api/interpreter")
+
+amsterdam_boundary_wgs84 <- st_transform(amsterdam_boundary_proj, 4326)
+bb <- st_bbox(amsterdam_boundary_wgs84)
+
+# Helper: download points for one tag pair
+fetch_points <- function(key, value, bb, timeout = 180) {
+  q <- opq(bbox = bb, timeout = timeout) |>
+    add_osm_feature(key = key, value = value)
+  osmdata_sf(q)$osm_points
+}
+
+# Fetch multiple lamp-like tags
+p1 <- fetch_points("highway",  "street_lamp", bb)
+p2 <- fetch_points("man_made", "street_lamp", bb)
+p3 <- fetch_points("man_made", "lamp",        bb)
+p4 <- fetch_points("man_made", "light_mast",  bb)
+
+# Combine, keep only columns that exist across them safely
+lamps_all <- bind_rows(p1, p2, p3, p4)
+
+# Drop duplicates by osm_id (important)
+lamps_all <- lamps_all |>
+  distinct(osm_id, .keep_all = TRUE)
+
+# Project + clip precisely
+lamps_all_proj <- st_transform(lamps_all, 28992) |>
+  st_filter(amsterdam_boundary_proj)
+
+nrow(lamps_all_proj)
+```
+
+# 4. Dowload the lit-streets data from OSM
+
+```{r}
+set_overpass_url("https://overpass.kumi.systems/api/interpreter")
+
+amsterdam_boundary_wgs84 <- st_transform(amsterdam_boundary_proj, 4326)
+bb <- st_bbox(amsterdam_boundary_wgs84)
+
+q_lit <- opq(bbox = bb, timeout = 180) |>
+  add_osm_feature(key = "highway") |>
+  add_osm_feature(key = "lit")
+
+dat_lit <- osmdata_sf(q_lit)
+
+lit_roads <- dat_lit$osm_lines |>
+  mutate(lit = tolower(lit)) |>
+  filter(lit %in% c("yes", "limited"))
+
+lit_roads_proj <- st_transform(lit_roads, 28992)
+lit_roads_proj <- st_filter(lit_roads_proj, amsterdam_boundary_proj)
+
+nrow(lit_roads_proj)
+```
+
+```{r}
+plot(st_geometry(amsterdam_boundary_proj), col = NA, border = "grey40")
+plot(st_geometry(lit_roads_proj), add = TRUE, col = "cyan", lwd = 0.4)
+plot(st_geometry(lamps_proj), add = TRUE, pch = 16, cex = 0.08, col = "orange")
+```
+
+```{r}
+library(osmdata)
+library(sf)
+library(dplyr)
+
+set_overpass_url("https://overpass-api.de/api/interpreter")
+
+q_roads <- opq(bbox = bb, timeout = 300) |>
+  add_osm_feature(key = "highway")
+
+dat_roads <- osmdata_sf(q_roads)
+
+# Keep only the road types you care about
+roads <- dat_roads$osm_lines |>
+  filter(highway %in% c(
+    "primary",
+    "secondary",
+    "tertiary",
+    "residential",
+    "unclassified",
+    "living_street"
+  )) |>
+  distinct(osm_id, .keep_all = TRUE)
+
+# Project + clip
+roads_proj <- roads |>
+  st_transform(28992) |>
+  st_filter(amsterdam_boundary_proj)
+
+nrow(roads_proj)
+
+```
+
+```{r}
+# Convert to WGS84 -- required for web maps... 
+lamps_wgs84 <- st_transform(lamps_proj, 4326)
+lit_roads_wgs84 <- st_transform(lit_roads, 4326)
+boundary_wgs84 <- st_transform(amsterdam_boundary_proj, 4326)
+
+# Write them as GeoJSON files
+st_write(lamps_wgs84, "lamps_amsterdam.geojson", delete_dsn = TRUE)
+st_write(lit_roads_wgs84, "lit_roads_amsterdam.geojson", delete_dsn = TRUE)
+st_write(boundary_wgs84, "amsterdam_boundary.geojson", delete_dsn = TRUE)
+```
+
+```{r}
+buurten_wgs84 <- st_transform(buurten, 4326)
+st_write(buurten_wgs84, "amsterdam_buurten.geojson", delete_dsn = TRUE)
+```
